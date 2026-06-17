@@ -1,0 +1,8 @@
+name = "cashflow-bot"
+main = "src/worker.js"
+compatibility_date = "2026-06-17"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cashflow_bot"
+database_id = "7419dbb1-5978-4d6d-b471-4546ea9bd0d6"

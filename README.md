@@ -1,70 +1,101 @@
-# 💰 Broke Bill Bot (@broke_bill_bot)
+# Cashflow Telegram Bot
 
-## 📝 About
+A 24/7 Telegram expense tracker designed for free hosting on Cloudflare Workers with Cloudflare D1.
 
-**Broke Bill Bot** is your personal finance tracker that makes managing expenses simple, fun, and efficient! Whether you're saving up for something special or just want to keep track of where your money goes, this bot has got your back. No more guessing where all your cash went—let Broke Bill do the math! 🧮💸
+Cloudflare Workers do not run as a permanent process. Telegram sends each bot update to `/webhook`, the Worker handles it, stores data in D1, replies to Telegram, then exits. This keeps the bot available without paying for an always-on server.
 
-## 🚀 Features
+## Commands
 
--   **Track Expenses with Ease**: Quickly add your daily expenses using simple commands.
--   **View Transactions**: Get a neat breakdown of where your money went.
--   **Total Expense Summary**: Stay informed with daily and total spending reports.
--   **Clear Data**: Want a fresh start? You can reset your expenses anytime.
--   **Super Simple Commands**: No complicated setups—just chat with the bot like a friend!
+```text
+/start
+/menu
+/add 5000 food
+/today
+/transactions
+/summary
+/month
+/categories
+/total
+/clear
+```
 
-## 📌 How to Use
+## Bot Flow
 
-1. **Add an expense**:
+- `/menu` opens the main dashboard.
+- `Quick Add` lets you pick a category and a preset amount without typing.
+- `/add 5000 food` records a custom expense.
+- `Today` shows today's total, entry count, average, biggest expense, and top categories.
+- `Month` shows the same summary for the current month.
+- `Categories` shows the monthly category breakdown.
+- `Transactions` lists today's entries.
 
-    ```
-    /add 5000 medicine
-    ```
+## Setup
 
-    ➡️ This adds a 5000 KHR expense under "medicine."
+1. Install dependencies:
 
-2. **View today's transactions**:
+```bash
+npm install
+```
 
-    ```
-    /transactions
-    ```
+2. Log in to Cloudflare:
 
-    ➡️ Get a list of all expenses recorded today.
+```bash
+npx wrangler login
+```
 
-3. **Check total spending**:
+3. Create a D1 database:
 
-    ```
-    /total
-    ```
+```bash
+npx wrangler d1 create cashflow_bot
+```
 
-    ➡️ View your total expenses so far.
+4. Copy the generated `database_id` into `wrangler.toml`.
 
-4. **Clear all data**:
-    ```
-    /clear
-    ```
-    ⚠️ This removes all recorded expenses—use wisely!
+5. Create the table:
 
-## 🤖 Why Use Broke Bill?
+```bash
+npm run db:migrate:remote
+```
 
--   **No complicated spreadsheets**—just chat and track.
--   **Perfect for budgeting newbies & pros alike!**
--   **Stay in control of your finances** without stress.
+6. Set Cloudflare Worker secrets:
 
-## 🎯 Who is This For?
+```bash
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put WEBHOOK_SECRET
+```
 
-Anyone who:
-✔️ Spends money (aka, everyone!)
-✔️ Wants to save more efficiently
-✔️ Loves tracking things in a fun and effortless way!
+Use any random long string for `WEBHOOK_SECRET`.
 
-## 🛠️ Built With
+7. Deploy:
 
--   Telegram Bot API
--   Node.js / Python (or your preferred tech stack!)
--   ❤️ Love for keeping finances in check!
+```bash
+npm run deploy
+```
 
-## 📬 Contact & Support
+8. Register the Telegram webhook:
 
-Have feedback or need help? Feel free to reach out or suggest improvements!
+```bash
+$env:TELEGRAM_BOT_TOKEN="your-bot-token"
+$env:WEBHOOK_SECRET="same-secret-from-step-6"
+$env:WORKER_URL="https://cashflow-bot.your-subdomain.workers.dev"
+npm run set:webhook
+```
 
-💡 **Start tracking smarter today with @broke_bill_bot!** 💡
+On macOS/Linux, use `export TELEGRAM_BOT_TOKEN=...` instead of `$env:...`.
+
+The webhook setup drops pending Telegram updates, so old messages should not replay after deployment.
+
+## Local Development
+
+Create `.dev.vars` from `.dev.vars.example`, then run:
+
+```bash
+npm run db:migrate:local
+npm run dev
+```
+
+For real Telegram testing, deploy first and use the public Worker URL as the webhook.
+
+## Important Security Note
+
+If your Telegram token was ever committed, shared, or printed in logs, rotate it in BotFather before deploying.
