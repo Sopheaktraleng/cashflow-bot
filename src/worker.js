@@ -185,15 +185,76 @@ async function handleCallback(callback, env) {
         return;
     }
 
-    if (data === "confirm_clear") {
+    if (data === "clear_today_warn") {
+        await sendMessage(env, chatId, "⚠️ Are you sure you want to clear today's expenses? This action cannot be undone.", {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "Yes, clear today", callback_data: "confirm_clear_today" }],
+                    [{ text: "Cancel", callback_data: "cancel_clear" }],
+                ],
+            },
+        });
+        return;
+    }
+
+    if (data === "clear_all_warn") {
+        const total = await getTotalExpenses(env.DB, userId);
+        const countRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM expenses WHERE user_id = ?").bind(userId).first();
+        const count = countRow?.count || 0;
+
+        if (count === 0) {
+            await sendMessage(env, chatId, "You don't have any recorded transactions to delete.");
+            return;
+        }
+
+        const warningMsg = [
+            `⚠️ *WARNING: Permanent Wipe* ⚠️`,
+            ``,
+            `This will permanently delete *ALL* your transaction history:`,
+            `- Total transactions: *${count}*`,
+            `- Total spent: *${formatMoney(total)} ${CURRENCY}*`,
+            ``,
+            `This action cannot be undone. To safeguard your data, we will automatically send you a *CSV backup file* first.`,
+            ``,
+            `Do you want to proceed?`
+        ].join("\n");
+
+        await sendMessage(env, chatId, warningMsg, {
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "✅ Yes, Backup & Wipe All", callback_data: "confirm_clear_all" }],
+                    [{ text: "❌ Cancel", callback_data: "cancel_clear" }],
+                ],
+            },
+        });
+        return;
+    }
+
+    if (data === "confirm_clear" || data === "confirm_clear_today") {
         await clearToday(env.DB, userId);
         await sendMessage(env, chatId, "Today's expenses have been cleared.");
         await sendMainMenu(env, chatId, userId, callback.from);
         return;
     }
 
+    if (data === "confirm_clear_all") {
+        try {
+            await sendCSVBackup(env, chatId, userId);
+        } catch (error) {
+            await sendMessage(env, chatId, `❌ Backup failed: ${error.message}\n\nDeletion cancelled to protect your data.`);
+            return;
+        }
+
+        await clearAllExpenses(env.DB, userId);
+        await sendMessage(env, chatId, "🗑️ All historical transactions have been deleted. A backup has been sent above.");
+        await sendMainMenu(env, chatId, userId, callback.from);
+        return;
+    }
+
     if (data === "cancel_clear") {
         await sendMessage(env, chatId, "Clear cancelled. Your data is still there.");
+        return;
     }
 }
 
@@ -371,10 +432,11 @@ async function sendCategoryBreakdown(env, chatId, userId, period) {
 }
 
 async function askClearConfirmation(env, chatId) {
-    await sendMessage(env, chatId, "Clear today's expenses?", {
+    await sendMessage(env, chatId, "What would you like to clear?", {
         reply_markup: {
             inline_keyboard: [
-                [{ text: "Yes, clear", callback_data: "confirm_clear" }],
+                [{ text: "Today's expenses only", callback_data: "clear_today_warn" }],
+                [{ text: "ALL history (Full Reset)", callback_data: "clear_all_warn" }],
                 [{ text: "Cancel", callback_data: "cancel_clear" }],
             ],
         },
@@ -479,6 +541,52 @@ async function clearToday(db, userId) {
         .prepare("DELETE FROM expenses WHERE user_id = ? AND date = ?")
         .bind(userId, today())
         .run();
+}
+
+async function clearAllExpenses(db, userId) {
+    await db
+        .prepare("DELETE FROM expenses WHERE user_id = ?")
+        .bind(userId)
+        .run();
+}
+
+async function sendCSVBackup(env, chatId, userId) {
+    const { results } = await env.DB.prepare(
+        "SELECT date, category, amount, created_at FROM expenses WHERE user_id = ? ORDER BY date ASC, id ASC"
+    )
+        .bind(userId)
+        .all();
+
+    if (!results || results.length === 0) {
+        throw new Error("No transactions found to backup.");
+    }
+
+    // Build CSV content
+    let csvContent = "Date,Category,Amount,Created At\n";
+    for (const row of results) {
+        const escapedCategory = String(row.category || "").replace(/"/g, '""');
+        csvContent += `"${row.date}","${escapedCategory}",${row.amount},"${row.created_at}"\n`;
+    }
+
+    // Send document to Telegram
+    const formData = new FormData();
+    formData.append("chat_id", chatId);
+    const file = new File([csvContent], `cashflow_backup_${today()}.csv`, { type: "text/csv" });
+    formData.append("document", file);
+    formData.append("caption", "Here is a CSV backup of your expenses before wiping.");
+
+    const response = await fetch(
+        `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`,
+        {
+            method: "POST",
+            body: formData,
+        }
+    );
+
+    if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(`Telegram sendDocument failed with status ${response.status}: ${detail}`);
+    }
 }
 
 async function sendMessage(env, chatId, text, extra = {}) {
