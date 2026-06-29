@@ -6,3 +6,6 @@ compatibility_date = "2026-06-17"
 binding = "DB"
 database_name = "cashflow_bot"
 database_id = "7419dbb1-5978-4d6d-b471-4546ea9bd0d6"
+
+[triggers]
+crons = ["0 1 * * 1"] # Every Monday at 1:00 AM UTC (8:00 AM ICT)

@@ -1,5 +1,8 @@
+import dashboardHtml from "./dashboard_html.js";
+
 const TIME_ZONE = "Asia/Bangkok";
 const CURRENCY = "KHR";
+const EXCHANGE_RATE = 4000; // 1 USD = 4000 KHR
 const QUICK_CATEGORIES = ["Food", "Coffee", "Transport", "Taxi", "Rent", "Shopping", "Bills", "Other"];
 const QUICK_AMOUNTS = [2000, 5000, 10000, 20000];
 
@@ -8,6 +11,55 @@ export default {
         const url = new URL(request.url);
 
         if (request.method === "GET") {
+            if (url.pathname === "/dashboard") {
+                return new Response(dashboardHtml, {
+                    headers: { "Content-Type": "text/html; charset=utf-8" },
+                });
+            }
+
+            if (url.pathname === "/api/data") {
+                const userId = url.searchParams.get("user_id");
+                if (!userId) {
+                    return json({ error: "Missing user_id parameter" }, 400);
+                }
+
+                const summary = await getFinancialSummary(env.DB, userId, "all");
+                const categories = await getCategoryRows(env.DB, userId, "month", 10);
+
+                const daily = [];
+                for (let i = 6; i >= 0; i--) {
+                    const d = dateDaysAgo(i);
+                    const dayRow = await env.DB.prepare(
+                        `SELECT COALESCE(SUM(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END), 0) AS total
+                         FROM expenses
+                         WHERE user_id = ? AND type = 'expense' AND date = ?`
+                    )
+                    .bind(userId, d)
+                    .first();
+                    daily.push({
+                        date: d,
+                        total: Number(dayRow?.total || 0),
+                    });
+                }
+
+                const recentRows = await env.DB.prepare(
+                    `SELECT amount, category, type, currency, date, created_at
+                     FROM expenses
+                     WHERE user_id = ?
+                     ORDER BY date DESC, id DESC
+                     LIMIT 10`
+                )
+                .bind(userId)
+                .all();
+
+                return json({
+                    summary,
+                    categories,
+                    daily,
+                    recent: recentRows.results || [],
+                });
+            }
+
             return json({ ok: true, service: "cashflow-bot" });
         }
 
@@ -27,20 +79,28 @@ export default {
         }
 
         const update = await request.json();
-        await handleUpdateSafely(update, env);
+        await handleUpdateSafely(update, env, url.origin);
 
         return json({ ok: true });
     },
+
+    async scheduled(event, env) {
+        try {
+            await sendWeeklyScheduledReports(env);
+        } catch (error) {
+            console.error("Scheduled cron task failed", error);
+        }
+    },
 };
 
-async function handleUpdateSafely(update, env) {
+async function handleUpdateSafely(update, env, origin) {
     try {
         const isDuplicate = await wasUpdateProcessed(env.DB, update.update_id);
         if (isDuplicate) {
             return;
         }
 
-        await handleUpdate(update, env);
+        await handleUpdate(update, env, origin);
     } catch (error) {
         console.error("Failed to handle Telegram update", error);
     }
@@ -64,30 +124,30 @@ async function wasUpdateProcessed(db, updateId) {
     }
 }
 
-async function handleUpdate(update, env) {
+async function handleUpdate(update, env, origin) {
     if (update.message) {
-        await handleMessage(update.message, env);
+        await handleMessage(update.message, env, origin);
         return;
     }
 
     if (update.callback_query) {
-        await handleCallback(update.callback_query, env);
+        await handleCallback(update.callback_query, env, origin);
     }
 }
 
-async function handleMessage(message, env) {
+async function handleMessage(message, env, origin) {
     const text = (message.text || "").trim();
     const chatId = message.chat.id;
     const userId = String(message.from?.id || chatId);
 
     if (text === "/start" || text === "/menu") {
-        await sendMainMenu(env, chatId, userId, message.from);
+        await sendMainMenu(env, chatId, userId, message.from, origin);
         return;
     }
 
-    if (text.startsWith("/add")) {
-        await addExpenseFromCommand(env, chatId, userId, text);
-        await sendMainMenu(env, chatId, userId, message.from);
+    if (text.startsWith("/add") || text.startsWith("/income")) {
+        await addTransactionFromCommand(env, chatId, userId, text);
+        await sendMainMenu(env, chatId, userId, message.from, origin);
         return;
     }
 
@@ -103,6 +163,13 @@ async function handleMessage(message, env) {
 
     if (text === "/month") {
         await sendSummary(env, chatId, userId, "month");
+        return;
+    }
+
+    if (text === "/week") {
+        const startDate = dateDaysAgo(6);
+        const endDate = today();
+        await sendWeeklyReportForUser(env, chatId, userId, startDate, endDate, "Weekly Spending Report (Rolling 7 Days)");
         return;
     }
 
@@ -122,12 +189,17 @@ async function handleMessage(message, env) {
         return;
     }
 
+    if (text === "/help" || text === "/h") {
+        await sendHelpMessage(env, chatId);
+        return;
+    }
+
     if (text.startsWith("/")) {
-        await sendMessage(env, chatId, "Unknown command. Use /menu to open the bot.");
+        await sendMessage(env, chatId, "⚠️ Unknown command. Type /help to see all available commands, or /menu to open the dashboard.");
     }
 }
 
-async function handleCallback(callback, env) {
+async function handleCallback(callback, env, origin) {
     const data = callback.data || "";
     const chatId = callback.message?.chat?.id;
     const userId = String(callback.from?.id || chatId);
@@ -135,6 +207,21 @@ async function handleCallback(callback, env) {
     await answerCallback(env, callback.id);
 
     if (!chatId) return;
+
+    if (data === "toggle_currency") {
+        const currentCurrency = await getDisplayCurrency(env.DB, userId);
+        const newCurrency = currentCurrency === "USD" ? "KHR" : "USD";
+        await setDisplayCurrency(env.DB, userId, newCurrency);
+        const flag = newCurrency === "USD" ? "🇺🇸" : "🇰🇭";
+        await sendMessage(env, chatId, `${flag} Display switched to *${newCurrency}*!`, { parse_mode: "Markdown" });
+        await sendMainMenu(env, chatId, userId, callback.from, origin);
+        return;
+    }
+
+    if (data === "menu") {
+        await sendMainMenu(env, chatId, userId, callback.from, origin);
+        return;
+    }
 
     if (data === "add_expense") {
         await sendCategoryPicker(env, chatId);
@@ -167,6 +254,13 @@ async function handleCallback(callback, env) {
 
     if (data === "summary_today") {
         await sendSummary(env, chatId, userId, "today");
+        return;
+    }
+
+    if (data === "summary_week") {
+        const startDate = dateDaysAgo(6);
+        const endDate = today();
+        await sendWeeklyReportForUser(env, chatId, userId, startDate, endDate, "Weekly Spending Report (Rolling 7 Days)");
         return;
     }
 
@@ -208,15 +302,17 @@ async function handleCallback(callback, env) {
         }
 
         const warningMsg = [
-            `⚠️ *WARNING: Permanent Wipe* ⚠️`,
+            `⚠️ *PERMANENT DATABASE RESET* ⚠️`,
+            `This action will delete all transaction records matching your ID.`,
             ``,
-            `This will permanently delete *ALL* your transaction history:`,
-            `- Total transactions: *${count}*`,
-            `- Total spent: *${formatMoney(total)} ${CURRENCY}*`,
+            `📊 *Wipe Stats:*`,
+            `├─ Total transactions: \`${count}\``,
+            `└─ Total spent: \`${formatMoney(total)} ៛\` (~$${formatMoney(total / EXCHANGE_RATE)})`,
             ``,
-            `This action cannot be undone. To safeguard your data, we will automatically send you a *CSV backup file* first.`,
+            `🔒 *Backup Safety:*`,
+            `We will auto-generate and send you a *CSV backup file* in the chat before deleting anything.`,
             ``,
-            `Do you want to proceed?`
+            `Do you wish to proceed?`
         ].join("\n");
 
         await sendMessage(env, chatId, warningMsg, {
@@ -234,7 +330,7 @@ async function handleCallback(callback, env) {
     if (data === "confirm_clear" || data === "confirm_clear_today") {
         await clearToday(env.DB, userId);
         await sendMessage(env, chatId, "Today's expenses have been cleared.");
-        await sendMainMenu(env, chatId, userId, callback.from);
+        await sendMainMenu(env, chatId, userId, callback.from, origin);
         return;
     }
 
@@ -248,7 +344,7 @@ async function handleCallback(callback, env) {
 
         await clearAllExpenses(env.DB, userId);
         await sendMessage(env, chatId, "🗑️ All historical transactions have been deleted. A backup has been sent above.");
-        await sendMainMenu(env, chatId, userId, callback.from);
+        await sendMainMenu(env, chatId, userId, callback.from, origin);
         return;
     }
 
@@ -258,62 +354,104 @@ async function handleCallback(callback, env) {
     }
 }
 
-async function addExpenseFromCommand(env, chatId, userId, text) {
+async function addTransactionFromCommand(env, chatId, userId, text) {
     const parts = text.split(/\s+/);
+    const command = parts[0].toLowerCase();
+    const type = command.startsWith("/income") ? "income" : "expense";
+
     if (parts.length < 3) {
-        await sendMessage(env, chatId, "Usage: /add <amount> <category>\nExample: /add 5000 food");
+        await sendMessage(
+            env,
+            chatId,
+            `💡 *Usage:*\n` +
+            `• Expense: \`/add <amount> [USD/KHR] <category>\`\n` +
+            `• Income: \`/income <amount> [USD/KHR] <category>\`\n\n` +
+            `Example: \`/add 5 usd coffee\` or \`/income 100000 khr salary\``,
+            { parse_mode: "Markdown" }
+        );
         return;
     }
 
     const amount = Number(parts[1]);
-    const category = parts.slice(2).join(" ").trim();
-
     if (!Number.isFinite(amount) || amount <= 0) {
-        await sendMessage(env, chatId, "Please enter a valid amount.");
+        await sendMessage(env, chatId, "❌ Please enter a valid amount.");
         return;
     }
 
+    let currency = "KHR";
+    let categoryIndex = 2;
+
+    const maybeCurrency = parts[2].toUpperCase();
+    if (maybeCurrency === "USD" || maybeCurrency === "KHR") {
+        currency = maybeCurrency;
+        categoryIndex = 3;
+    }
+
+    const category = parts.slice(categoryIndex).join(" ").trim();
     if (!category) {
-        await sendMessage(env, chatId, "Please enter a category.");
+        await sendMessage(env, chatId, "❌ Please enter a category.");
         return;
     }
 
-    const date = today();
-    await addExpenseRecord(env.DB, userId, amount, category);
+    await addExpenseRecord(env.DB, userId, amount, category, type, currency);
 
-    await sendMessage(env, chatId, `${formatMoney(amount)} ${CURRENCY} added for ${category} on ${date}.`);
+    const typeLabel = type === "income" ? "Income" : "Expense";
+    const currencySymbol = currency === "USD" ? "$" : "៛";
+    const formattedAmount = currency === "USD" ? amount : formatMoney(amount);
+
+    let confirmationMsg = `✅ *${typeLabel} added!*\n` +
+                          `• Category: ${capitalize(category)}\n` +
+                          `• Amount: *${currencySymbol}${formattedAmount}*`;
+    
+    if (currency === "USD") {
+        confirmationMsg += ` (~${formatMoney(amount * EXCHANGE_RATE)} ៛)`;
+    } else {
+        confirmationMsg += ` (~$${formatMoney(amount / EXCHANGE_RATE)})`;
+    }
+
+    await sendMessage(env, chatId, confirmationMsg, { parse_mode: "Markdown" });
 }
 
-async function sendMainMenu(env, chatId, userId, from) {
+async function sendMainMenu(env, chatId, userId, from, origin) {
     const username = from?.username ? `@${from.username}` : from?.first_name || "there";
-    const totalToday = await getTotalToday(env.DB, userId);
-    const monthTotal = await getMonthTotal(env.DB, userId);
-    const topCategory = await getTopCategory(env.DB, userId, "month");
-
+    
+    const displayCurrency = await getDisplayCurrency(env.DB, userId);
+    const todaySummary = await getFinancialSummary(env.DB, userId, "today");
+    const monthSummary = await getFinancialSummary(env.DB, userId, "month");
+    const allSummary = await getFinancialSummary(env.DB, userId, "all");
+    
     const text = [
-        `Cashflow for ${username}`,
-        "",
-        `Today: ${formatMoney(totalToday)} ${CURRENCY}`,
-        `This month: ${formatMoney(monthTotal)} ${CURRENCY}`,
-        `Top category: ${topCategory || "No spending yet"}`,
-        "",
-        "Choose what you want to do."
+        `💳 *CASHFLOW EDGE*`,
+        `👤 User: *${username}*`,
+        `🏳️ Display: *${displayCurrency}*`,
+        ``,
+        `⚖️ *Net Balance:* \`${formatAmount(allSummary.balanceKhr, displayCurrency)}\``,
+        `📥 *Income:* \`${formatAmount(allSummary.totalIncomeInKhr, displayCurrency)}\` *(All-time)*`,
+        `📤 *Spent:* \`${formatAmount(allSummary.totalExpenseInKhr, displayCurrency)}\` *(All-time)*`,
+        ``,
+        `⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯`,
+        `📊 *Activity Overview*`,
+        `• Today Spent: \`${formatAmount(todaySummary.totalExpenseInKhr, displayCurrency)}\``,
+        `• Month Spent: \`${formatAmount(monthSummary.totalExpenseInKhr, displayCurrency)}\``,
+        ``,
+        `Select an action below:`
     ].join("\n");
 
+    const webAppUrl = `${origin}/dashboard?user_id=${userId}&username=${encodeURIComponent(username)}`;
+    const toggleLabel = displayCurrency === "USD" ? "🇰🇭 Use KHR (៛)" : "🇺🇸 Use USD ($)";
+
     await sendMessage(env, chatId, text, {
+        parse_mode: "Markdown",
         reply_markup: {
             inline_keyboard: [
-                [{ text: "Quick Add", callback_data: "add_expense" }],
+                [{ text: "📱 Open Web Dashboard", web_app: { url: webAppUrl } }],
                 [
-                    { text: "Today", callback_data: "summary_today" },
-                    { text: "Month", callback_data: "summary_month" },
+                    { text: "📊 Today Summary", callback_data: "summary_today" },
+                    { text: "📜 Daily Ledger", callback_data: "view_transactions" },
                 ],
                 [
-                    { text: "Transactions", callback_data: "view_transactions" },
-                    { text: "Categories", callback_data: "categories_month" },
-                ],
-                [
-                    { text: "Clear Today", callback_data: "clear_data" },
+                    { text: toggleLabel, callback_data: "toggle_currency" },
+                    { text: "🗑️ Clear Today", callback_data: "clear_data" },
                 ],
             ],
         },
@@ -356,7 +494,7 @@ async function sendAmountPicker(env, chatId, category) {
 async function sendTransactions(env, chatId, userId) {
     const date = today();
     const { results } = await env.DB.prepare(
-        "SELECT amount, category, created_at FROM expenses WHERE user_id = ? AND date = ? ORDER BY id ASC"
+        "SELECT amount, category, type, currency, created_at FROM expenses WHERE user_id = ? AND date = ? ORDER BY id ASC"
     )
         .bind(userId, date)
         .all();
@@ -366,53 +504,82 @@ async function sendTransactions(env, chatId, userId) {
         return;
     }
 
-    const lines = results.map((row, index) => {
-        return `${index + 1}. ${capitalize(row.category)} - ${formatMoney(row.amount)} ${CURRENCY}`;
+    const lines = results.map((row) => {
+        const isIncome = row.type === "income";
+        const emoji = isIncome ? "💰" : "💸";
+        const sign = isIncome ? "+" : "-";
+        const symbol = row.currency === "USD" ? "$" : "";
+        const suffix = row.currency === "KHR" ? " ៛" : "";
+        const amtStr = `${sign}${symbol}${row.currency === "USD" ? row.amount : formatMoney(row.amount)}${suffix}`;
+        return `${emoji} \`${amtStr}\` • ${capitalize(row.category)}`;
     });
 
-    await sendMessage(env, chatId, [`Transactions for ${date}:`, "", ...lines].join("\n"));
+    await sendMessage(env, chatId, [
+        `📜 *DAILY TRANSACTIONS*`,
+        `📅 \`${date}\``,
+        ``,
+        ...lines
+    ].join("\n"), { 
+        parse_mode: "Markdown",
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "⬅️ Back to Menu", callback_data: "menu" }]
+            ]
+        }
+    });
 }
 
 async function sendSummary(env, chatId, userId, period) {
+    const displayCurrency = await getDisplayCurrency(env.DB, userId);
     const stats = await getPeriodStats(env.DB, userId, period);
     const breakdown = await getCategoryRows(env.DB, userId, period, 5);
-    const title = period === "month" ? `Month summary (${monthLabel()})` : `Today summary (${today()})`;
+    const title = period === "month" ? `Month Summary (${monthLabel()})` : `Today Summary (${today()})`;
 
     const lines = [
-        title,
-        "",
-        `Spent: ${formatMoney(stats.total)} ${CURRENCY}`,
-        `Entries: ${stats.count}`,
-        `Average: ${formatMoney(stats.average)} ${CURRENCY}`,
+        `📊 *${title.toUpperCase()}*`,
+        ``,
+        `💸 *Total Spent:* \`${formatAmount(stats.total, displayCurrency)}\``,
+        `🧮 *Average Spend:* \`${formatAmount(stats.average, displayCurrency)}\``,
+        `🛍️ *Total Entries:* \`${stats.count} items\``,
     ];
 
     if (stats.maxAmount) {
-        lines.push(`Biggest: ${formatMoney(stats.maxAmount)} ${CURRENCY} on ${capitalize(stats.maxCategory)}`);
+        const symbol = stats.maxCurrency === "USD" ? "$" : "";
+        const suffix = stats.maxCurrency === "KHR" ? " ៛" : "";
+        const amt = stats.maxCurrency === "USD" ? stats.maxAmount : formatMoney(stats.maxAmount);
+        
+        let maxStr = `🔥 *Biggest Single Spend:* \`${symbol}${amt}${suffix}\` on *${capitalize(stats.maxCategory)}*`;
+        if (stats.maxCurrency === "USD") {
+            maxStr += ` (~${formatMoney(stats.maxAmount * EXCHANGE_RATE)} ៛)`;
+        } else {
+            maxStr += ` (~$${formatMoney(stats.maxAmount / EXCHANGE_RATE)})`;
+        }
+        lines.push(maxStr);
     }
 
     if (breakdown.length) {
-        lines.push("", "Top categories:");
-        for (const row of breakdown) {
+        lines.push(`⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯`, `🏷️ *Top Categories:*`);
+        breakdown.forEach((row) => {
             const percent = stats.total > 0 ? Math.round((row.total / stats.total) * 100) : 0;
-            lines.push(`${capitalize(row.category)}: ${formatMoney(row.total)} ${CURRENCY} (${percent}%)`);
-        }
+            lines.push(`• ${capitalize(row.category)}: \`${formatAmount(row.total, displayCurrency)}\` (${percent}%)`);
+        });
     }
 
     await sendMessage(env, chatId, lines.join("\n"), {
+        parse_mode: "Markdown",
         reply_markup: {
             inline_keyboard: [
-                [{ text: "Quick Add", callback_data: "add_expense" }],
                 [
-                    { text: "Today", callback_data: "summary_today" },
-                    { text: "Month", callback_data: "summary_month" },
+                    { text: "📜 Daily Ledger", callback_data: "view_transactions" },
+                    { text: "⬅️ Back to Menu", callback_data: "menu" }
                 ],
-                [{ text: "Transactions", callback_data: "view_transactions" }],
             ],
         },
     });
 }
 
 async function sendCategoryBreakdown(env, chatId, userId, period) {
+    const displayCurrency = await getDisplayCurrency(env.DB, userId);
     const rows = await getCategoryRows(env.DB, userId, period, 10);
     const stats = await getPeriodStats(env.DB, userId, period);
     const title = period === "month" ? `Category breakdown for ${monthLabel()}` : `Category breakdown for ${today()}`;
@@ -425,7 +592,7 @@ async function sendCategoryBreakdown(env, chatId, userId, period) {
     const lines = [title, ""];
     for (const row of rows) {
         const percent = stats.total > 0 ? Math.round((row.total / stats.total) * 100) : 0;
-        lines.push(`${capitalize(row.category)}: ${formatMoney(row.total)} ${CURRENCY} (${percent}%)`);
+        lines.push(`${capitalize(row.category)}: ${formatAmount(row.total, displayCurrency)} (${percent}%)`);
     }
 
     await sendMessage(env, chatId, lines.join("\n"));
@@ -443,28 +610,95 @@ async function askClearConfirmation(env, chatId) {
     });
 }
 
-async function getTotalToday(db, userId) {
+async function getDisplayCurrency(db, userId) {
     const row = await db
-        .prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = ? AND date = ?")
-        .bind(userId, today())
+        .prepare("SELECT display_currency FROM user_settings WHERE user_id = ?")
+        .bind(userId)
         .first();
+    return row?.display_currency || "KHR";
+}
 
-    return Number(row?.total || 0);
+async function setDisplayCurrency(db, userId, currency) {
+    await db
+        .prepare(
+            "INSERT INTO user_settings (user_id, display_currency) VALUES (?, ?) " +
+            "ON CONFLICT(user_id) DO UPDATE SET display_currency = excluded.display_currency"
+        )
+        .bind(userId, currency)
+        .run();
+}
+
+function formatAmount(amountInKhr, displayCurrency) {
+    if (displayCurrency === "USD") {
+        const usd = amountInKhr / EXCHANGE_RATE;
+        return `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    } else {
+        return `${formatMoney(amountInKhr)} ៛`;
+    }
+}
+
+async function getFinancialSummary(db, userId, period) {
+    let condition = "";
+    let bindParams = [userId];
+    
+    if (period === "today") {
+        condition = "AND date = ?";
+        bindParams.push(today());
+    } else if (period === "month") {
+        condition = "AND date LIKE ?";
+        bindParams.push(`${monthPrefix()}%`);
+    }
+
+    const { results } = await db.prepare(
+        `SELECT type, currency, SUM(amount) AS total
+         FROM expenses
+         WHERE user_id = ? ${condition}
+         GROUP BY type, currency`
+    )
+    .bind(...bindParams)
+    .all();
+
+    let incomeUsd = 0;
+    let incomeKhr = 0;
+    let expenseUsd = 0;
+    let expenseKhr = 0;
+
+    if (results) {
+        for (const row of results) {
+            const amount = Number(row.total || 0);
+            if (row.type === "income") {
+                if (row.currency === "USD") incomeUsd += amount;
+                else incomeKhr += amount;
+            } else {
+                if (row.currency === "USD") expenseUsd += amount;
+                else expenseKhr += amount;
+            }
+        }
+    }
+
+    const totalIncomeInKhr = incomeKhr + (incomeUsd * EXCHANGE_RATE);
+    const totalExpenseInKhr = expenseKhr + (expenseUsd * EXCHANGE_RATE);
+    const balanceKhr = totalIncomeInKhr - totalExpenseInKhr;
+
+    return {
+        incomeKhr,
+        incomeUsd,
+        expenseKhr,
+        expenseUsd,
+        totalIncomeInKhr,
+        totalExpenseInKhr,
+        balanceKhr
+    };
 }
 
 async function getTotalExpenses(db, userId) {
     const row = await db
-        .prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = ?")
+        .prepare(
+            `SELECT COALESCE(SUM(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END), 0) AS total 
+             FROM expenses 
+             WHERE user_id = ? AND type = 'expense'`
+        )
         .bind(userId)
-        .first();
-
-    return Number(row?.total || 0);
-}
-
-async function getMonthTotal(db, userId) {
-    const row = await db
-        .prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = ? AND date LIKE ?")
-        .bind(userId, `${monthPrefix()}%`)
         .first();
 
     return Number(row?.total || 0);
@@ -473,30 +707,30 @@ async function getMonthTotal(db, userId) {
 async function getTopCategory(db, userId, period) {
     const rows = await getCategoryRows(db, userId, period, 1);
     if (!rows.length) return null;
-    return `${capitalize(rows[0].category)} (${formatMoney(rows[0].total)} ${CURRENCY})`;
+    return `${capitalize(rows[0].category)} (${formatMoney(rows[0].total)} ៛)`;
 }
 
 async function getPeriodStats(db, userId, period) {
     const condition = period === "month" ? "date LIKE ?" : "date = ?";
     const value = period === "month" ? `${monthPrefix()}%` : today();
+    
     const row = await db
         .prepare(
-            `SELECT COALESCE(SUM(amount), 0) AS total,
+            `SELECT COALESCE(SUM(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END), 0) AS total,
                     COUNT(*) AS count,
-                    COALESCE(AVG(amount), 0) AS average,
-                    COALESCE(MAX(amount), 0) AS maxAmount
+                    COALESCE(AVG(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END), 0) AS average
              FROM expenses
-             WHERE user_id = ? AND ${condition}`
+             WHERE user_id = ? AND type = 'expense' AND ${condition}`
         )
         .bind(userId, value)
         .first();
 
     const biggest = await db
         .prepare(
-            `SELECT amount, category
+            `SELECT amount, category, currency
              FROM expenses
-             WHERE user_id = ? AND ${condition}
-             ORDER BY amount DESC, id DESC
+             WHERE user_id = ? AND type = 'expense' AND ${condition}
+             ORDER BY (CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END) DESC, id DESC
              LIMIT 1`
         )
         .bind(userId, value)
@@ -508,6 +742,7 @@ async function getPeriodStats(db, userId, period) {
         average: Number(row?.average || 0),
         maxAmount: Number(biggest?.amount || 0),
         maxCategory: biggest?.category || "",
+        maxCurrency: biggest?.currency || "KHR"
     };
 }
 
@@ -516,9 +751,11 @@ async function getCategoryRows(db, userId, period, limit) {
     const value = period === "month" ? `${monthPrefix()}%` : today();
     const { results } = await db
         .prepare(
-            `SELECT category, SUM(amount) AS total, COUNT(*) AS count
+            `SELECT category, 
+                    SUM(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END) AS total, 
+                    COUNT(*) AS count
              FROM expenses
-             WHERE user_id = ? AND ${condition}
+             WHERE user_id = ? AND type = 'expense' AND ${condition}
              GROUP BY LOWER(category)
              ORDER BY total DESC
              LIMIT ?`
@@ -529,10 +766,10 @@ async function getCategoryRows(db, userId, period, limit) {
     return results || [];
 }
 
-async function addExpenseRecord(db, userId, amount, category) {
+async function addExpenseRecord(db, userId, amount, category, type = "expense", currency = "KHR") {
     await db
-        .prepare("INSERT INTO expenses (user_id, date, amount, category) VALUES (?, ?, ?, ?)")
-        .bind(userId, today(), amount, normalizeCategory(category))
+        .prepare("INSERT INTO expenses (user_id, date, amount, category, type, currency) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(userId, today(), amount, normalizeCategory(category), type, currency)
         .run();
 }
 
@@ -667,4 +904,254 @@ function json(data, status = 200) {
             "Content-Type": "application/json; charset=utf-8",
         },
     });
+}
+
+function dateDaysAgo(days) {
+    const d = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    return new Intl.DateTimeFormat("en-CA", {
+        timeZone: TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).format(d);
+}
+
+async function sendWeeklyScheduledReports(env) {
+    const sevenDaysAgo = dateDaysAgo(7);
+    const oneDayAgo = dateDaysAgo(1);
+
+    const { results } = await env.DB.prepare(
+        "SELECT DISTINCT user_id FROM expenses WHERE date >= ? AND date <= ?"
+    )
+        .bind(sevenDaysAgo, oneDayAgo)
+        .all();
+
+    if (results && results.length > 0) {
+        for (const row of results) {
+            try {
+                await sendWeeklyReportForUser(
+                    env,
+                    row.user_id,
+                    row.user_id,
+                    sevenDaysAgo,
+                    oneDayAgo,
+                    "Weekly Spending Report (Last Week)"
+                );
+            } catch (err) {
+                console.error(`Failed to send weekly scheduled report to ${row.user_id}`, err);
+            }
+        }
+    }
+}
+
+async function sendWeeklyReportForUser(env, chatId, userId, startDate, endDate, titleLabel) {
+    const row = await env.DB
+        .prepare(
+            `SELECT COALESCE(SUM(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END), 0) AS total,
+                    COUNT(*) AS count,
+                    COALESCE(AVG(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END), 0) AS average
+             FROM expenses
+             WHERE user_id = ? AND type = 'expense' AND date >= ? AND date <= ?`
+        )
+        .bind(userId, startDate, endDate)
+        .first();
+
+    const total = Number(row?.total || 0);
+    const count = Number(row?.count || 0);
+    const average = Number(row?.average || 0);
+
+    if (count === 0) {
+        await sendMessage(env, chatId, `📊 *${titleLabel}*\n\n📅 \`${startDate}\` to \`${endDate}\`\n\nYou didn't record any expenses during this period.`, {
+            parse_mode: "Markdown"
+        });
+        return;
+    }
+
+    const biggest = await env.DB
+        .prepare(
+            `SELECT amount, category, currency
+             FROM expenses
+             WHERE user_id = ? AND type = 'expense' AND date >= ? AND date <= ?
+             ORDER BY (CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END) DESC, id DESC
+             LIMIT 1`
+        )
+        .bind(userId, startDate, endDate)
+        .first();
+
+    const categories = await env.DB
+        .prepare(
+            `SELECT category, 
+                    SUM(CASE WHEN currency = 'USD' THEN amount * ${EXCHANGE_RATE} ELSE amount END) AS total
+             FROM expenses
+             WHERE user_id = ? AND type = 'expense' AND date >= ? AND date <= ?
+             GROUP BY LOWER(category)
+             ORDER BY total DESC`
+        )
+        .bind(userId, startDate, endDate)
+        .all();
+
+    const catResults = categories.results || [];
+    const displayCurrency = await getDisplayCurrency(env.DB, userId);
+    const totalSpentStr = formatAmount(total, displayCurrency);
+    const chartUrl = generatePieChartUrl(catResults, totalSpentStr);
+
+    const textLines = [
+        `📊 *${titleLabel.toUpperCase()}*`,
+        `📅 \`${startDate}\` to \`${endDate}\``,
+        ``,
+        `💰 *Total Spent*`,
+        `└─ \`${formatAmount(total, displayCurrency)}\``,
+        ``,
+        `🧮 *Average Spend*`,
+        `└─ \`${formatAmount(average, displayCurrency)}\``,
+        ``,
+        `🛍️ *Activity:* \`${count} entries\``,
+    ];
+
+    if (biggest) {
+        const symbol = biggest.currency === "USD" ? "$" : "";
+        const suffix = biggest.currency === "KHR" ? " ៛" : "";
+        const amt = biggest.currency === "USD" ? biggest.amount : formatMoney(biggest.amount);
+        
+        let maxStr = `🔥 *Biggest Single Spend:* \`${symbol}${amt}${suffix}\` on *${capitalize(biggest.category)}*`;
+        if (biggest.currency === "USD") {
+            maxStr += ` (~${formatMoney(biggest.amount * EXCHANGE_RATE)} ៛)`;
+        } else {
+            maxStr += ` (~$${formatMoney(biggest.amount / EXCHANGE_RATE)})`;
+        }
+        textLines.push(maxStr);
+    }
+
+    if (catResults.length > 0) {
+        textLines.push(``, `🏷️ *Category Breakdown:*`);
+        catResults.forEach((cat, idx) => {
+            const percent = total > 0 ? Math.round((cat.total / total) * 100) : 0;
+            const branch = idx === catResults.length - 1 ? "└─" : "├─";
+            textLines.push(`${branch} ${capitalize(cat.category)}: \`${formatAmount(cat.total, displayCurrency)}\` (${percent}%)`);
+        });
+    }
+
+    const caption = textLines.join("\n");
+    const payload = {
+        chat_id: chatId,
+        photo: chartUrl,
+        caption: caption,
+        parse_mode: "Markdown",
+    };
+
+    try {
+        const response = await fetch(
+            `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            }
+        );
+
+        if (!response.ok) {
+            const detail = await response.text();
+            console.error(`Telegram sendPhoto failed: ${response.status} ${detail}`);
+            await sendMessage(env, chatId, caption, { parse_mode: "Markdown" });
+        }
+    } catch (err) {
+        console.error("Error sending photo to Telegram", err);
+        await sendMessage(env, chatId, caption, { parse_mode: "Markdown" });
+    }
+}
+
+function generatePieChartUrl(categories, totalSpentStr) {
+    const labels = categories.map(c => capitalize(c.category));
+    const data = categories.map(c => c.total);
+
+    const limit = 5;
+    let finalLabels = labels;
+    let finalData = data;
+    if (categories.length > limit) {
+        finalLabels = labels.slice(0, limit);
+        finalData = data.slice(0, limit);
+        const otherTotal = data.slice(limit).reduce((a, b) => a + b, 0);
+        finalLabels.push("Other");
+        finalData.push(otherTotal);
+    }
+
+    const chart = {
+        type: "doughnut",
+        data: {
+            labels: finalLabels,
+            datasets: [{
+                data: finalData,
+                backgroundColor: [
+                    "#6366f1",
+                    "#ec4899",
+                    "#f59e0b",
+                    "#10b981",
+                    "#06b6d4",
+                    "#64748b"
+                ],
+                borderWidth: 3,
+                borderColor: "#0d0f14"
+            }]
+        },
+        options: {
+            cutoutPercentage: 72,
+            legend: {
+                position: "bottom",
+                labels: {
+                    fontSize: 12,
+                    fontColor: "#9ca3af",
+                    fontFamily: "Arial",
+                    padding: 12
+                }
+            },
+            plugins: {
+                datalabels: {
+                    display: false
+                },
+                doughnutlabel: {
+                    labels: [
+                        {
+                            text: "Total Spent",
+                            font: { size: 13, family: "Arial", weight: "bold" },
+                            color: "#9ca3af"
+                         },
+                         {
+                            text: totalSpentStr,
+                            font: { size: 19, family: "Arial", weight: "bold" },
+                            color: "#ffffff"
+                         }
+                    ]
+                }
+            }
+        }
+    };
+
+    const encodedChart = encodeURIComponent(JSON.stringify(chart));
+    return `https://quickchart.io/chart?c=${encodedChart}&w=500&h=350&bkg=%230d0f14`;
+}
+
+async function sendHelpMessage(env, chatId) {
+    const text = [
+        `💡 *CASHFLOW EDGE — BOT COMMANDS*`,
+        ``,
+        `📊 *Summaries*`,
+        `• /menu — Opens the main visual dashboard.`,
+        `• /today — Today's total spending summary.`,
+        `• /week — Rolling 7-day spending report + doughnut chart.`,
+        `• /month — Current month's spending summary.`,
+        `• /transactions — Ledger of today's itemized entries.`,
+        ``,
+        `✍️ *Logging Transactions*`,
+        `• /add <amount> [USD/KHR] <category>`,
+        `  _Example:_ /add 5 usd coffee`,
+        `  _Example:_ /add 12000 lunch`,
+        `• /income <amount> [USD/KHR] <category>`,
+        `  _Example:_ /income 500 usd salary`,
+        ``,
+        `⚙️ *Management*`,
+        `• /clear — Wipe records (sends a CSV backup first).`,
+        `• /help — Lists all available commands.`,
+    ].join("\n");
+
+    await sendMessage(env, chatId, text, { parse_mode: "Markdown" });
 }

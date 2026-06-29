@@ -1,0 +1,602 @@
+export default `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cashflow Edge</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- ChartJS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: #07090e;
+            --card-bg: rgba(18, 22, 33, 0.6);
+            --card-border: rgba(255, 255, 255, 0.05);
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.15);
+            --success: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.1);
+            --danger: #ef4444;
+            --danger-bg: rgba(239, 68, 68, 0.1);
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            padding: 16px;
+            overflow-y: auto;
+            background-image: 
+                radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+                radial-gradient(circle at 100% 100%, rgba(239, 68, 68, 0.06) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        /* Header Style */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding: 4px 0;
+        }
+
+        h1 {
+            font-weight: 800;
+            font-size: 1.5rem;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            padding: 5px 12px;
+            border-radius: 20px;
+            backdrop-filter: blur(20px);
+        }
+
+        .user-avatar {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.7rem;
+            color: #fff;
+        }
+
+        .user-name {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        /* Hero Balance Card */
+        .hero-card {
+            background: linear-gradient(135deg, rgba(20, 24, 39, 0.9) 0%, rgba(12, 14, 24, 0.9) 100%);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            padding: 24px;
+            text-align: center;
+            backdrop-filter: blur(20px);
+            margin-bottom: 12px;
+            box-shadow: 0 10px 30px -10px var(--primary-glow);
+            position: relative;
+        }
+
+        .hero-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+
+        .hero-value {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 4px;
+            color: #ffffff;
+        }
+
+        .hero-subvalue {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        /* Mini Stats row */
+        .mini-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .mini-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 18px;
+            padding: 16px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .mini-label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .mini-indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .mini-indicator.income { background: var(--success); }
+        .mini-indicator.expense { background: var(--danger); }
+
+        .mini-value {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 2px;
+        }
+
+        .mini-subvalue {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Chart Section Layout */
+        .section-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 20px;
+            padding: 18px;
+            backdrop-filter: blur(20px);
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 16px;
+            letter-spacing: -0.2px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            width: 100%;
+            height: 200px;
+        }
+
+        /* Split layout for charts on tablet+ */
+        .charts-row {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        @media (min-width: 600px) {
+            .charts-row {
+                grid-template-columns: 1.1fr 0.9fr;
+            }
+        }
+
+        /* Transactions List styling */
+        .tx-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .tx-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            transition: background-color 0.2s ease;
+        }
+
+        .tx-row:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .tx-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tx-badge {
+            width: 32px;
+            height: 32px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .tx-meta {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .tx-name {
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #ffffff;
+        }
+
+        .tx-date {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 1px;
+        }
+
+        .tx-right {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .tx-amt {
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+
+        .tx-amt.income { color: var(--success); }
+        .tx-amt.expense { color: var(--text-color); }
+
+        .loader-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 60vh;
+            gap: 12px;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(255, 255, 255, 0.05);
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-card {
+            background: var(--card-bg);
+            border: 1px solid var(--danger);
+            border-radius: 20px;
+            padding: 30px 20px;
+            text-align: center;
+            backdrop-filter: blur(20px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="app">
+        <!-- Loader Screen -->
+        <div class="loader-container" id="loader">
+            <div class="spinner"></div>
+            <p style="color: var(--text-muted); font-size: 0.85rem; font-weight: 500;">Loading financial data...</p>
+        </div>
+
+        <!-- Dashboard Content -->
+        <div id="content" style="display: none;">
+            <header>
+                <h1>Cashflow Edge</h1>
+                <div class="user-profile">
+                    <div class="user-avatar" id="avatar-letter">U</div>
+                    <span class="user-name" id="username-display">User</span>
+                </div>
+            </header>
+
+            <!-- Hero Balance Display -->
+            <div class="hero-card">
+                <div class="hero-label">Net Balance</div>
+                <div class="hero-value" id="balance-val">$0.00</div>
+                <div class="hero-subvalue" id="balance-sub">0 ៛</div>
+            </div>
+
+            <!-- Mini stats row -->
+            <div class="mini-grid">
+                <div class="mini-card">
+                    <div class="mini-label">
+                        <span class="mini-indicator income"></span> Income
+                    </div>
+                    <div class="mini-value" id="income-val">$0.00</div>
+                    <div class="mini-subvalue" id="income-sub">0 ៛</div>
+                </div>
+                <div class="mini-card">
+                    <div class="mini-label">
+                        <span class="mini-indicator expense"></span> Expenses
+                    </div>
+                    <div class="mini-value" id="expense-val">$0.00</div>
+                    <div class="mini-subvalue" id="expense-sub">0 ៛</div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="charts-row">
+                <div class="section-card">
+                    <div class="section-title">Weekly Trend</div>
+                    <div class="chart-wrapper">
+                        <canvas id="dailyChart"></canvas>
+                    </div>
+                </div>
+                <div class="section-card">
+                    <div class="section-title">Categories</div>
+                    <div class="chart-wrapper">
+                        <canvas id="categoryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Ledger -->
+            <div class="section-card">
+                <div class="section-title">
+                    <span>Recent Transactions</span>
+                    <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">Last 10 entries</span>
+                </div>
+                <div class="tx-list" id="transaction-list">
+                    <!-- Dynamic transactions render here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const EXCHANGE_RATE = 4000;
+
+        function formatKhr(value) {
+            return Number(value || 0).toLocaleString("en-US", { maximumFractionDigits: 0 }) + " ៛";
+        }
+
+        function formatUsd(value) {
+            return "$" + Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let userId = urlParams.get('user_id');
+        let username = urlParams.get('username') || 'Member';
+
+        if (window.Telegram && Telegram.WebApp) {
+            const tg = Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+
+            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                userId = String(tg.initDataUnsafe.user.id);
+                username = tg.initDataUnsafe.user.first_name || tg.initDataUnsafe.user.username || username;
+            }
+        }
+
+        document.getElementById('username-display').innerText = username;
+        document.getElementById('avatar-letter').innerText = username.charAt(0).toUpperCase();
+
+        if (!userId) {
+            showError("No User Context. Open via the Telegram Bot.");
+        } else {
+            loadDashboardData(userId);
+        }
+
+        function showError(msg) {
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('app').innerHTML = ' \
+                <div class="error-card"> \
+                    <span style="font-size: 2rem;">⚠️</span> \
+                    <h3 style="margin-top: 10px; font-weight: 700;">Connection Issue</h3> \
+                    <p style="margin-top: 8px; font-size: 0.85rem; color: var(--text-muted);">' + msg + '</p> \
+                </div> \
+            ';
+        }
+
+        async function loadDashboardData(id) {
+            try {
+                const response = await fetch('/api/data?user_id=' + id);
+                if (!response.ok) {
+                    throw new Error("Could not load database records.");
+                }
+                const data = await response.json();
+                renderDashboard(data);
+            } catch (err) {
+                showError(err.message || "Failed to load dashboard data.");
+            }
+        }
+
+        function renderDashboard(data) {
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('content').style.display = 'block';
+
+            const balanceKhr = data.summary.balanceKhr;
+            const incomeKhr = data.summary.totalIncomeInKhr;
+            const expenseKhr = data.summary.totalExpenseInKhr;
+
+            document.getElementById('balance-val').innerText = formatUsd(balanceKhr / EXCHANGE_RATE);
+            document.getElementById('balance-sub').innerText = formatKhr(balanceKhr);
+
+            document.getElementById('income-val').innerText = formatUsd(incomeKhr / EXCHANGE_RATE);
+            document.getElementById('income-sub').innerText = formatKhr(incomeKhr);
+
+            document.getElementById('expense-val').innerText = formatUsd(expenseKhr / EXCHANGE_RATE);
+            document.getElementById('expense-sub').innerText = formatKhr(expenseKhr);
+
+            // Category Chart
+            const catCanvas = document.getElementById('categoryChart').getContext('2d');
+            const categoryLabels = data.categories.map(c => c.category);
+            const categoryValues = data.categories.map(c => c.total);
+
+            new Chart(catCanvas, {
+                type: 'doughnut',
+                data: {
+                    labels: categoryLabels,
+                    datasets: [{
+                        data: categoryValues,
+                        backgroundColor: ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#eab308'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#9ca3af',
+                                boxWidth: 8,
+                                padding: 12,
+                                font: { family: 'Plus Jakarta Sans', size: 10, weight: '500' }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Trend Chart
+            const dailyCanvas = document.getElementById('dailyChart').getContext('2d');
+            const dailyLabels = data.daily.map(d => d.date.slice(5)); 
+            const dailyValues = data.daily.map(d => d.total);
+
+            const purpleGradient = dailyCanvas.createLinearGradient(0, 0, 0, 180);
+            purpleGradient.addColorStop(0, 'rgba(99, 102, 241, 0.2)');
+            purpleGradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
+
+            new Chart(dailyCanvas, {
+                type: 'line',
+                data: {
+                    labels: dailyLabels,
+                    datasets: [{
+                        data: dailyValues,
+                        borderColor: '#6366f1',
+                        backgroundColor: purpleGradient,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2,
+                        pointRadius: 2,
+                        pointHoverRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { 
+                            grid: { display: false }, 
+                            ticks: { color: '#9ca3af', font: { family: 'Plus Jakarta Sans', size: 9, weight: '500' } } 
+                        },
+                        y: { 
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' }, 
+                            ticks: { color: '#9ca3af', font: { family: 'Plus Jakarta Sans', size: 9, weight: '500' } } 
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+
+            // Recent Transaction Render
+            const listContainer = document.getElementById('transaction-list');
+            listContainer.innerHTML = '';
+            
+            if (data.recent.length === 0) {
+                listContainer.innerHTML = '<p style="text-align: center; color: var(--text-muted); padding: 20px; font-size: 0.8rem; font-weight: 500;">No transactions recorded.</p>';
+                return;
+            }
+
+            const emojis = {
+                'Food': '🍔',
+                'Coffee': '☕',
+                'Transport': '🚌',
+                'Taxi': '🚕',
+                'Rent': '🏠',
+                'Shopping': '🛒',
+                'Bills': '📄',
+                'Salary': '💰',
+                'Invest': '📈',
+                'Other': '🎮'
+            };
+
+            data.recent.forEach(tx => {
+                const categoryCap = tx.category.charAt(0).toUpperCase() + tx.category.slice(1).toLowerCase();
+                const emoji = emojis[categoryCap] || (tx.type === 'income' ? '💰' : '💸');
+                const sign = tx.type === 'income' ? '+' : '-';
+                const classType = tx.type === 'income' ? 'income' : 'expense';
+                const formattedAmount = tx.currency === 'USD' ? formatUsd(tx.amount) : formatKhr(tx.amount);
+
+                const row = document.createElement('div');
+                row.className = 'tx-row';
+                row.innerHTML = 
+                    '<div class="tx-left">' +
+                        '<div class="tx-badge">' + emoji + '</div>' +
+                        '<div class="tx-meta">' +
+                            '<span class="tx-name">' + categoryCap + '</span>' +
+                            '<span class="tx-date">' + tx.date + '</span>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="tx-right">' +
+                        '<span class="tx-amt ' + classType + '">' + sign + formattedAmount + '</span>' +
+                    '</div>';
+                listContainer.appendChild(row);
+            });
+        }
+    </script>
+</body>
+</html>`;
