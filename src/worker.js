@@ -60,6 +60,56 @@ export default {
                 });
             }
 
+            if (url.pathname === "/api/history") {
+                const userId = url.searchParams.get("user_id");
+                if (!userId) {
+                    return json({ error: "Missing user_id parameter" }, 400);
+                }
+
+                const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+                const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "20", 10)));
+                const offset = (page - 1) * limit;
+
+                const type = url.searchParams.get("type"); // optional: 'income' or 'expense'
+                const search = url.searchParams.get("search")?.trim(); // optional keyword search
+
+                let query = "SELECT id, amount, category, type, currency, date, created_at FROM expenses WHERE user_id = ?";
+                let countQuery = "SELECT COUNT(*) as count FROM expenses WHERE user_id = ?";
+                const params = [userId];
+                const countParams = [userId];
+
+                if (type && (type === "income" || type === "expense")) {
+                    query += " AND type = ?";
+                    countQuery += " AND type = ?";
+                    params.push(type);
+                    countParams.push(type);
+                }
+
+                if (search) {
+                    query += " AND (category LIKE ? OR CAST(amount AS TEXT) LIKE ?)";
+                    countQuery += " AND (category LIKE ? OR CAST(amount AS TEXT) LIKE ?)";
+                    const searchPattern = `%${search}%`;
+                    params.push(searchPattern, searchPattern);
+                    countParams.push(searchPattern, searchPattern);
+                }
+
+                query += " ORDER BY date DESC, id DESC LIMIT ? OFFSET ?";
+                params.push(limit, offset);
+
+                const countRow = await env.DB.prepare(countQuery).bind(...countParams).first();
+                const total = Number(countRow?.count || 0);
+
+                const { results } = await env.DB.prepare(query).bind(...params).all();
+
+                return json({
+                    transactions: results || [],
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit)
+                });
+            }
+
             return json({ ok: true, service: "cashflow-bot" });
         }
 
@@ -156,6 +206,19 @@ async function handleMessage(message, env, origin) {
         return;
     }
 
+    if (text.startsWith("/history") || text === "/all") {
+        const parts = text.split(/\s+/);
+        let page = 1;
+        if (parts.length > 1) {
+            const parsedPage = parseInt(parts[1], 10);
+            if (Number.isInteger(parsedPage) && parsedPage > 0) {
+                page = parsedPage;
+            }
+        }
+        await sendHistory(env, chatId, userId, page);
+        return;
+    }
+
     if (text === "/summary") {
         await sendSummary(env, chatId, userId, "today");
         return;
@@ -249,6 +312,12 @@ async function handleCallback(callback, env, origin) {
 
     if (data === "view_transactions") {
         await sendTransactions(env, chatId, userId);
+        return;
+    }
+
+    if (data.startsWith("history:")) {
+        const page = parseInt(data.slice(8), 10) || 1;
+        await updateHistoryMessage(env, chatId, userId, callback.message.message_id, page);
         return;
     }
 
@@ -527,6 +596,104 @@ async function sendTransactions(env, chatId, userId) {
             ]
         }
     });
+}
+
+async function sendHistory(env, chatId, userId, page = 1) {
+    const { text, replyMarkup } = await getHistoryMessageData(env.DB, userId, page);
+    await sendMessage(env, chatId, text, {
+        parse_mode: "Markdown",
+        reply_markup: replyMarkup
+    });
+}
+
+async function updateHistoryMessage(env, chatId, userId, messageId, page = 1) {
+    const { text, replyMarkup } = await getHistoryMessageData(env.DB, userId, page);
+    try {
+        await telegram(env, "editMessageText", {
+            chat_id: chatId,
+            message_id: messageId,
+            text: text,
+            parse_mode: "Markdown",
+            reply_markup: replyMarkup
+        });
+    } catch (err) {
+        console.error("Failed to edit history message, sending new message instead:", err);
+        await sendMessage(env, chatId, text, {
+            parse_mode: "Markdown",
+            reply_markup: replyMarkup
+        });
+    }
+}
+
+async function getHistoryMessageData(db, userId, page = 1) {
+    const limit = 10;
+    const offset = (page - 1) * limit;
+
+    const countRow = await db
+        .prepare("SELECT COUNT(*) AS count FROM expenses WHERE user_id = ?")
+        .bind(userId)
+        .first();
+    const totalCount = countRow?.count || 0;
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const currentPage = Math.max(1, Math.min(page, totalPages));
+
+    const { results } = await db
+        .prepare(
+            `SELECT amount, category, type, currency, date, created_at 
+             FROM expenses 
+             WHERE user_id = ? 
+             ORDER BY date DESC, id DESC 
+             LIMIT ? OFFSET ?`
+        )
+        .bind(userId, limit, (currentPage - 1) * limit)
+        .all();
+
+    if (!results || results.length === 0) {
+        return {
+            text: "📜 *TRANSACTION HISTORY*\n\nNo transactions recorded yet.",
+            replyMarkup: {
+                inline_keyboard: [
+                    [{ text: "⬅️ Back to Menu", callback_data: "menu" }]
+                ]
+            }
+        };
+    }
+
+    const lines = results.map((row) => {
+        const isIncome = row.type === "income";
+        const emoji = isIncome ? "💰" : "💸";
+        const sign = isIncome ? "+" : "-";
+        const symbol = row.currency === "USD" ? "$" : "";
+        const suffix = row.currency === "KHR" ? " ៛" : "";
+        const amtStr = `${sign}${symbol}${row.currency === "USD" ? row.amount : formatMoney(row.amount)}${suffix}`;
+        return `• \`${row.date}\` • ${emoji} \`${amtStr}\` • ${capitalize(row.category)}`;
+    });
+
+    const text = [
+        `📜 *TRANSACTION HISTORY*`,
+        `📖 *Page ${currentPage} of ${totalPages}* (Total: ${totalCount})`,
+        ``,
+        ...lines
+    ].join("\n");
+
+    const navRow = [];
+    if (currentPage > 1) {
+        navRow.push({ text: "⬅️ Prev", callback_data: `history:${currentPage - 1}` });
+    }
+    if (currentPage < totalPages) {
+        navRow.push({ text: "Next ➡️", callback_data: `history:${currentPage + 1}` });
+    }
+
+    const inlineKeyboard = [];
+    if (navRow.length > 0) {
+        inlineKeyboard.push(navRow);
+    }
+    inlineKeyboard.push([{ text: "⬅️ Back to Menu", callback_data: "menu" }]);
+
+    return {
+        text,
+        replyMarkup: { inline_keyboard: inlineKeyboard }
+    };
 }
 
 async function sendSummary(env, chatId, userId, period) {
@@ -1140,6 +1307,7 @@ async function sendHelpMessage(env, chatId) {
         `• /week — Rolling 7-day spending report + doughnut chart.`,
         `• /month — Current month's spending summary.`,
         `• /transactions — Ledger of today's itemized entries.`,
+        `• /history — View full paginated transaction ledger (all-time).`,
         ``,
         `✍️ *Logging Transactions*`,
         `• /add <amount> [USD/KHR] <category>`,

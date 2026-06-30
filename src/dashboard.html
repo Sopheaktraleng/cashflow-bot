@@ -326,6 +326,144 @@
             text-align: center;
             backdrop-filter: blur(20px);
         }
+
+        /* History View Styles */
+        .history-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .btn-back {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            color: var(--text-color);
+            padding: 6px 14px;
+            border-radius: 14px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            backdrop-filter: blur(20px);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-back:hover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .filter-section {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 20px;
+            padding: 16px;
+            margin-bottom: 16px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .search-container {
+            position: relative;
+            width: 100%;
+        }
+
+        .search-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 10px 14px;
+            color: var(--text-color);
+            font-family: inherit;
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-glow);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .filter-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .pill-group {
+            display: flex;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--card-border);
+            padding: 3px;
+            border-radius: 12px;
+            gap: 2px;
+        }
+
+        .pill-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 6px 14px;
+            border-radius: 9px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .pill-btn.active {
+            background: var(--primary);
+            color: #ffffff;
+            box-shadow: 0 2px 8px var(--primary-glow);
+        }
+
+        /* Pagination Styles */
+        .pagination-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 16px;
+            padding: 4px 8px;
+        }
+
+        .pagination-info {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .pagination-btn {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            color: var(--text-color);
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -391,10 +529,53 @@
             <div class="section-card">
                 <div class="section-title">
                     <span>Recent Transactions</span>
-                    <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">Last 10 entries</span>
+                    <button id="btn-see-all" style="background: none; border: none; color: var(--primary); font-size: 0.8rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 6px; transition: background 0.2s;">
+                        See All <span style="font-size: 0.95rem;">→</span>
+                    </button>
                 </div>
                 <div class="tx-list" id="transaction-list">
                     <!-- Dynamic transactions render here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- History View -->
+        <div id="history-view" style="display: none;">
+            <div class="history-header">
+                <button class="btn-back" id="btn-back-to-dashboard">
+                    <span>←</span> Back to Dashboard
+                </button>
+                <h2 style="font-size: 1.15rem; font-weight: 700; background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">History Ledger</h2>
+            </div>
+
+            <!-- Filter Controls -->
+            <div class="filter-section">
+                <div class="search-container">
+                    <input type="text" class="search-input" id="history-search-input" placeholder="Search by category or amount..." />
+                </div>
+                <div class="filter-row">
+                    <div class="pill-group" id="type-pill-group">
+                        <button class="pill-btn active" data-type="all">All</button>
+                        <button class="pill-btn" data-type="income">Income</button>
+                        <button class="pill-btn" data-type="expense">Expense</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ledger List -->
+            <div class="section-card">
+                <div class="tx-list" id="history-transaction-list">
+                    <!-- Dynamic historical transactions render here -->
+                </div>
+                <!-- Pagination -->
+                <div class="pagination-container">
+                    <button class="pagination-btn" id="btn-prev-page" disabled>
+                        <span>←</span> Prev
+                    </button>
+                    <span class="pagination-info" id="history-page-info">Page 1 of 1</span>
+                    <button class="pagination-btn" id="btn-next-page" disabled>
+                        Next <span>→</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -459,6 +640,9 @@
             }
         }
 
+        let categoryChartInstance = null;
+        let dailyChartInstance = null;
+
         function renderDashboard(data) {
             document.getElementById('loader').style.display = 'none';
             document.getElementById('content').style.display = 'block';
@@ -477,11 +661,14 @@
             document.getElementById('expense-sub').innerText = formatKhr(expenseKhr);
 
             // Category Chart
+            if (categoryChartInstance) {
+                categoryChartInstance.destroy();
+            }
             const catCanvas = document.getElementById('categoryChart').getContext('2d');
             const categoryLabels = data.categories.map(c => c.category);
             const categoryValues = data.categories.map(c => c.total);
 
-            new Chart(catCanvas, {
+            categoryChartInstance = new Chart(catCanvas, {
                 type: 'doughnut',
                 data: {
                     labels: categoryLabels,
@@ -510,6 +697,9 @@
             });
 
             // Trend Chart
+            if (dailyChartInstance) {
+                dailyChartInstance.destroy();
+            }
             const dailyCanvas = document.getElementById('dailyChart').getContext('2d');
             const dailyLabels = data.daily.map(d => d.date.slice(5)); 
             const dailyValues = data.daily.map(d => d.total);
@@ -518,7 +708,7 @@
             purpleGradient.addColorStop(0, 'rgba(99, 102, 241, 0.2)');
             purpleGradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
 
-            new Chart(dailyCanvas, {
+            dailyChartInstance = new Chart(dailyCanvas, {
                 type: 'line',
                 data: {
                     labels: dailyLabels,
@@ -597,6 +787,168 @@
                 `;
                 listContainer.appendChild(row);
             });
+        }
+
+        // State variables for History View
+        let historyPage = 1;
+        const historyLimit = 20;
+        let historySearch = "";
+        let historyType = "all"; // 'all', 'income', 'expense'
+
+        // Navigation Elements
+        const btnSeeAll = document.getElementById('btn-see-all');
+        const btnBackToDashboard = document.getElementById('btn-back-to-dashboard');
+        const contentDiv = document.getElementById('content');
+        const historyViewDiv = document.getElementById('history-view');
+
+        // Search & Filter Elements
+        const historySearchInput = document.getElementById('history-search-input');
+        const typePillGroup = document.getElementById('type-pill-group');
+        const btnPrevPage = document.getElementById('btn-prev-page');
+        const btnNextPage = document.getElementById('btn-next-page');
+        const historyPageInfo = document.getElementById('history-page-info');
+        const historyListContainer = document.getElementById('history-transaction-list');
+
+        // Navigation Actions
+        btnSeeAll.addEventListener('click', () => {
+            contentDiv.style.display = 'none';
+            historyViewDiv.style.display = 'block';
+            historyPage = 1;
+            historySearchInput.value = '';
+            historySearch = '';
+            historyType = 'all';
+            typePillGroup.querySelectorAll('.pill-btn').forEach(btn => {
+                if (btn.getAttribute('data-type') === 'all') {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+            loadHistoryData();
+        });
+
+        btnBackToDashboard.addEventListener('click', () => {
+            historyViewDiv.style.display = 'none';
+            contentDiv.style.display = 'block';
+            loadDashboardData(userId); // Reload dashboard in case data changed
+        });
+
+        // Search Handlers (with simple debounce)
+        let searchTimeout;
+        historySearchInput.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                historySearch = e.target.value;
+                historyPage = 1;
+                loadHistoryData();
+            }, 300);
+        });
+
+        // Pill Handlers
+        typePillGroup.addEventListener('click', (e) => {
+            const button = e.target.closest('.pill-btn');
+            if (!button) return;
+
+            typePillGroup.querySelectorAll('.pill-btn').forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+
+            historyType = button.getAttribute('data-type');
+            historyPage = 1;
+            loadHistoryData();
+        });
+
+        // Pagination Handlers
+        btnPrevPage.addEventListener('click', () => {
+            if (historyPage > 1) {
+                historyPage--;
+                loadHistoryData();
+            }
+        });
+
+        btnNextPage.addEventListener('click', () => {
+            historyPage++;
+            loadHistoryData();
+        });
+
+        async function loadHistoryData() {
+            historyListContainer.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 30px;"><div class="spinner" style="margin: 0 auto 12px; width:24px; height:24px;"></div>Loading history...</div>';
+            
+            try {
+                let url = `/api/history?user_id=${userId}&page=${historyPage}&limit=${historyLimit}`;
+                if (historyType !== 'all') {
+                    url += `&type=${historyType}`;
+                }
+                if (historySearch) {
+                    url += `&search=${encodeURIComponent(historySearch)}`;
+                }
+
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error("Could not load history records.");
+                }
+                const data = await response.json();
+                renderHistory(data);
+            } catch (err) {
+                historyListContainer.innerHTML = `<p style="text-align: center; color: var(--danger); padding: 20px;">Error: ${err.message}</p>`;
+            }
+        }
+
+        function renderHistory(data) {
+            historyListContainer.innerHTML = '';
+            
+            const transactions = data.transactions || [];
+            const totalPages = data.totalPages || 1;
+            historyPage = data.page || 1;
+
+            if (transactions.length === 0) {
+                historyListContainer.innerHTML = '<p style="text-align: center; color: var(--text-muted); padding: 40px; font-size: 0.85rem; font-weight: 500;">No transactions found matching criteria.</p>';
+                btnPrevPage.disabled = true;
+                btnNextPage.disabled = true;
+                historyPageInfo.innerText = `Page ${historyPage} of ${totalPages}`;
+                return;
+            }
+
+            const emojis = {
+                'Food': '🍔',
+                'Coffee': '☕',
+                'Transport': '🚌',
+                'Taxi': '🚕',
+                'Rent': '🏠',
+                'Shopping': '🛒',
+                'Bills': '📄',
+                'Salary': '💰',
+                'Invest': '📈',
+                'Other': '🎮'
+            };
+
+            transactions.forEach(tx => {
+                const categoryCap = tx.category.charAt(0).toUpperCase() + tx.category.slice(1).toLowerCase();
+                const emoji = emojis[categoryCap] || (tx.type === 'income' ? '💰' : '💸');
+                const sign = tx.type === 'income' ? '+' : '-';
+                const classType = tx.type === 'income' ? 'income' : 'expense';
+                const formattedAmount = tx.currency === 'USD' ? formatUsd(tx.amount) : formatKhr(tx.amount);
+
+                const row = document.createElement('div');
+                row.className = 'tx-row';
+                row.innerHTML = `
+                    <div class="tx-left">
+                        <div class="tx-badge">${emoji}</div>
+                        <div class="tx-meta">
+                            <span class="tx-name">${categoryCap}</span>
+                            <span class="tx-date">${tx.date}</span>
+                        </div>
+                    </div>
+                    <div class="tx-right">
+                        <span class="tx-amt ${classType}">${sign}${formattedAmount}</span>
+                    </div>
+                `;
+                historyListContainer.appendChild(row);
+            });
+
+            // Update pagination buttons
+            historyPageInfo.innerText = `Page ${historyPage} of ${totalPages}`;
+            btnPrevPage.disabled = historyPage <= 1;
+            btnNextPage.disabled = historyPage >= totalPages;
         }
     </script>
 </body>
