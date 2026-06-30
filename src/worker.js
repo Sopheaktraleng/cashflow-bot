@@ -220,23 +220,23 @@ async function handleMessage(message, env, origin) {
     const chatId = message.chat.id;
     const userId = String(message.from?.id || chatId);
 
-    if (text === "/start" || text === "/menu") {
+    if (text === "/start" || text === "/menu" || text === "/s" || text === "/m") {
         await sendMainMenu(env, chatId, userId, message.from, origin);
         return;
     }
 
-    if (text.startsWith("/add") || text.startsWith("/income")) {
+    if (text.startsWith("/add") || text.startsWith("/income") || text.startsWith("/a ") || text === "/a" || text.startsWith("/i ") || text === "/i") {
         await addTransactionFromCommand(env, chatId, userId, text);
         await sendMainMenu(env, chatId, userId, message.from, origin);
         return;
     }
 
-    if (text === "/transactions" || text === "/today") {
+    if (text === "/transactions" || text === "/today" || text === "/t" || text === "/td") {
         await sendTransactions(env, chatId, userId);
         return;
     }
 
-    if (text.startsWith("/budget")) {
+    if (text.startsWith("/budget") || text.startsWith("/b ") || text === "/b") {
         await handleBudgetCommand(env, chatId, userId, text);
         return;
     }
@@ -463,7 +463,7 @@ async function handleCallback(callback, env, origin) {
 async function addTransactionFromCommand(env, chatId, userId, text) {
     const parts = text.split(/\s+/);
     const command = parts[0].toLowerCase();
-    const type = command.startsWith("/income") ? "income" : "expense";
+    const type = (command === "/i" || command.startsWith("/income")) ? "income" : "expense";
 
     if (parts.length < 3) {
         await sendMessage(
