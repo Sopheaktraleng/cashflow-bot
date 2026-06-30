@@ -496,6 +496,28 @@ export default `<!DOCTYPE html>
                 <div class="hero-subvalue" id="balance-sub">0 ៛</div>
             </div>
 
+            <!-- Budget Progress Card (Only shown if budget is set) -->
+            <div class="section-card" id="budget-card" style="display: none; margin-bottom: 20px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.05); background: rgba(18, 22, 33, 0.7); position: relative; overflow: hidden;">
+                <div class="section-title" style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <span style="display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-color);">
+                        🎯 Budget Limit
+                    </span>
+                    <span id="budget-percent" style="font-size: 0.85rem; color: var(--primary); font-weight: 800; padding: 2px 8px; background: rgba(99, 102, 241, 0.1); border-radius: 20px; border: 1px solid rgba(99, 102, 241, 0.2);">0%</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 500;">
+                        <span style="color: var(--text-color);">Spent: <strong id="budget-spent-txt" style="font-weight: 700;">$0.00</strong></span>
+                        <span style="color: var(--text-muted);">Limit: <span id="budget-total-txt">$0.00</span></span>
+                    </div>
+                    <div style="width: 100%; height: 8px; background: rgba(255, 255, 255, 0.05); border-radius: 4px; overflow: hidden; position: relative;">
+                        <div id="budget-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary) 0%, #818cf8 100%); border-radius: 4px; transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 0 10px var(--primary-glow);"></div>
+                    </div>
+                    <div id="budget-status-msg" style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500; text-align: left; display: flex; align-items: center; gap: 4px;">
+                        Remaining: $0.00
+                    </div>
+                </div>
+            </div>
+
             <!-- Mini stats row -->
             <div class="mini-grid">
                 <div class="mini-card">
@@ -655,6 +677,63 @@ export default `<!DOCTYPE html>
             const balanceKhr = data.summary.balanceKhr;
             const incomeKhr = data.summary.totalIncomeInKhr;
             const expenseKhr = data.summary.totalExpenseInKhr;
+
+            // Monthly Budget Progress Render
+            const budgetCard = document.getElementById('budget-card');
+            const budgetKhr = data.budgetKhr || 0;
+            const monthExpenseKhr = data.monthExpenseKhr || 0;
+
+            if (budgetKhr <= 0) {
+                budgetCard.style.display = 'none';
+            } else {
+                budgetCard.style.display = 'block';
+
+                const percent = Math.round((monthExpenseKhr / budgetKhr) * 100);
+                const progressWidth = Math.min(100, percent);
+                
+                // Update percent badge
+                const percentBadge = document.getElementById('budget-percent');
+                percentBadge.innerText = \`\${percent}%\`;
+
+                // Update text values
+                document.getElementById('budget-spent-txt').innerText = \`\${formatUsd(monthExpenseKhr / EXCHANGE_RATE)} (\${formatKhr(monthExpenseKhr)})\`;
+                document.getElementById('budget-total-txt').innerText = \`\${formatUsd(budgetKhr / EXCHANGE_RATE)} (\${formatKhr(budgetKhr)})\`;
+
+                // Update progress bar
+                const progressBar = document.getElementById('budget-progress-bar');
+                progressBar.style.width = \`\${progressWidth}%\`;
+
+                // Color-code progress bar and badge
+                const statusMsg = document.getElementById('budget-status-msg');
+                if (percent >= 100) {
+                    progressBar.style.background = 'linear-gradient(90deg, #ef4444 0%, #f43f5e 100%)';
+                    progressBar.style.boxShadow = '0 0 10px rgba(239, 68, 68, 0.4)';
+                    percentBadge.style.color = 'var(--danger)';
+                    percentBadge.style.background = 'rgba(239, 68, 68, 0.1)';
+                    percentBadge.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                    
+                    const overage = monthExpenseKhr - budgetKhr;
+                    statusMsg.innerHTML = \`🚨 <span style="color: #f43f5e; font-weight: 600;">Over budget by \${formatUsd(overage / EXCHANGE_RATE)} (\${formatKhr(overage)})</span>\`;
+                } else if (percent >= 90) {
+                    progressBar.style.background = 'linear-gradient(90deg, #f97316 0%, #f59e0b 100%)';
+                    progressBar.style.boxShadow = '0 0 10px rgba(249, 115, 22, 0.4)';
+                    percentBadge.style.color = '#f97316';
+                    percentBadge.style.background = 'rgba(249, 115, 22, 0.1)';
+                    percentBadge.style.borderColor = 'rgba(249, 115, 22, 0.2)';
+                    
+                    const remaining = budgetKhr - monthExpenseKhr;
+                    statusMsg.innerHTML = \`⚠️ <span style="color: #f97316; font-weight: 600;">Warning: Only \${formatUsd(remaining / EXCHANGE_RATE)} (\${formatKhr(remaining)}) left!</span>\`;
+                } else {
+                    progressBar.style.background = 'linear-gradient(90deg, var(--primary) 0%, #818cf8 100%)';
+                    progressBar.style.boxShadow = '0 0 10px var(--primary-glow)';
+                    percentBadge.style.color = 'var(--primary)';
+                    percentBadge.style.background = 'rgba(99, 102, 241, 0.1)';
+                    percentBadge.style.borderColor = 'rgba(99, 102, 241, 0.2)';
+                    
+                    const remaining = budgetKhr - monthExpenseKhr;
+                    statusMsg.innerHTML = \`💚 <span style="color: var(--success); font-weight: 600;">Remaining: \${formatUsd(remaining / EXCHANGE_RATE)} (\${formatKhr(remaining)})</span>\`;
+                }
+            }
 
             document.getElementById('balance-val').innerText = formatUsd(balanceKhr / EXCHANGE_RATE);
             document.getElementById('balance-sub').innerText = formatKhr(balanceKhr);

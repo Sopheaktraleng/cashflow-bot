@@ -52,11 +52,23 @@ export default {
                 .bind(userId)
                 .all();
 
+                const settingsRow = await env.DB.prepare(
+                    "SELECT monthly_budget FROM user_settings WHERE user_id = ?"
+                )
+                .bind(userId)
+                .first();
+                const budgetKhr = settingsRow?.monthly_budget || 0;
+
+                const monthSummary = await getFinancialSummary(env.DB, userId, "month");
+                const monthExpenseKhr = monthSummary?.totalExpenseInKhr || 0;
+
                 return json({
                     summary,
                     categories,
                     daily,
                     recent: recentRows.results || [],
+                    budgetKhr,
+                    monthExpenseKhr
                 });
             }
 
@@ -224,6 +236,11 @@ async function handleMessage(message, env, origin) {
         return;
     }
 
+    if (text.startsWith("/budget")) {
+        await handleBudgetCommand(env, chatId, userId, text);
+        return;
+    }
+
     if (text.startsWith("/history") || text === "/all") {
         const parts = text.split(/\s+/);
         let page = 1;
@@ -318,7 +335,9 @@ async function handleCallback(callback, env, origin) {
         const [, category, amountText] = data.split(":");
         const amount = Number(amountText);
         await addExpenseRecord(env.DB, userId, amount, category);
-        await sendMessage(env, chatId, `${formatMoney(amount)} ${CURRENCY} saved to ${category}.`);
+        let msg = `✅ *${formatMoney(amount)} ${CURRENCY}* saved to ${category}.`;
+        msg += await getBudgetWarningText(env.DB, userId);
+        await sendMessage(env, chatId, msg, { parse_mode: "Markdown" });
         await sendSummary(env, chatId, userId, "today");
         return;
     }
@@ -494,6 +513,10 @@ async function addTransactionFromCommand(env, chatId, userId, text) {
         confirmationMsg += ` (~${formatMoney(amount * EXCHANGE_RATE)} ៛)`;
     } else {
         confirmationMsg += ` (~$${formatMoney(amount / EXCHANGE_RATE)})`;
+    }
+
+    if (type === "expense") {
+        confirmationMsg += await getBudgetWarningText(env.DB, userId);
     }
 
     await sendMessage(env, chatId, confirmationMsg, { parse_mode: "Markdown" });
@@ -1316,6 +1339,97 @@ function generatePieChartUrl(categories, totalSpentStr) {
     return `https://quickchart.io/chart?c=${encodedChart}&w=500&h=350&bkg=%230d0f14`;
 }
 
+async function handleBudgetCommand(env, chatId, userId, text) {
+    const parts = text.split(/\s+/);
+    if (parts.length < 2) {
+        await sendMessage(
+            env,
+            chatId,
+            `💡 *Usage:*\n` +
+            `• Set Budget: \`/budget <amount> [USD/KHR]\`\n` +
+            `• Disable Budget: \`/budget 0\`\n\n` +
+            `Example: \`/budget 300 usd\` or \`/budget 1200000 khr\``,
+            { parse_mode: "Markdown" }
+        );
+        return;
+    }
+
+    const amount = Number(parts[1]);
+    if (!Number.isFinite(amount) || amount < 0) {
+        await sendMessage(env, chatId, "❌ Please enter a valid non-negative amount.");
+        return;
+    }
+
+    if (amount === 0) {
+        await setMonthlyBudget(env.DB, userId, 0);
+        await sendMessage(env, chatId, "🎯 *Monthly budget disabled.*", { parse_mode: "Markdown" });
+        return;
+    }
+
+    let currency = "KHR";
+    if (parts.length >= 3) {
+        const maybeCurrency = parts[2].toUpperCase();
+        if (maybeCurrency === "USD" || maybeCurrency === "KHR") {
+            currency = maybeCurrency;
+        } else {
+            await sendMessage(env, chatId, "❌ Please specify a valid currency (USD or KHR).");
+            return;
+        }
+    } else {
+        currency = await getDisplayCurrency(env.DB, userId);
+    }
+
+    const budgetInKhr = currency === "USD" ? amount * EXCHANGE_RATE : amount;
+
+    await setMonthlyBudget(env.DB, userId, budgetInKhr);
+
+    const formattedAmount = currency === "USD" ? `$${formatMoney(amount)}` : `${formatMoney(amount)} ៛`;
+    const altAmount = currency === "USD" ? `${formatMoney(budgetInKhr)} ៛` : `$${formatMoney(amount / EXCHANGE_RATE)}`;
+    await sendMessage(
+        env,
+        chatId,
+        `🎯 *Monthly budget set to ${formattedAmount}* (~${altAmount})!`,
+        { parse_mode: "Markdown" }
+    );
+}
+
+async function setMonthlyBudget(db, userId, budgetInKhr) {
+    await db
+        .prepare(
+            "INSERT INTO user_settings (user_id, monthly_budget) VALUES (?, ?) " +
+            "ON CONFLICT(user_id) DO UPDATE SET monthly_budget = excluded.monthly_budget"
+        )
+        .bind(userId, budgetInKhr)
+        .run();
+}
+
+async function getBudgetWarningText(db, userId) {
+    const settingsRow = await db.prepare(
+        "SELECT monthly_budget FROM user_settings WHERE user_id = ?"
+    )
+    .bind(userId)
+    .first();
+    
+    const budgetKhr = settingsRow?.monthly_budget || 0;
+    if (budgetKhr <= 0) return "";
+
+    const monthSummary = await getFinancialSummary(db, userId, "month");
+    const totalSpentInKhr = monthSummary.totalExpenseInKhr;
+    const displayCurrency = await getDisplayCurrency(db, userId);
+    
+    const percent = Math.round((totalSpentInKhr / budgetKhr) * 100);
+    
+    if (percent >= 100) {
+        const overageInKhr = totalSpentInKhr - budgetKhr;
+        const formattedOverage = formatAmount(overageInKhr, displayCurrency);
+        return `\n\n🚨 *OVER BUDGET ALERT!*\n└─ You have exceeded your monthly budget by *${formattedOverage}* (${percent}% spent).`;
+    } else if (percent >= 90) {
+        const formattedRemaining = formatAmount(budgetKhr - totalSpentInKhr, displayCurrency);
+        return `\n\n⚠️ *BUDGET WARNING!*\n└─ You have spent *${percent}%* of your monthly budget (only *${formattedRemaining}* remaining).`;
+    }
+    return "";
+}
+
 async function sendHelpMessage(env, chatId) {
     const text = [
         `💡 *CASHFLOW EDGE — BOT COMMANDS*`,
@@ -1336,6 +1450,7 @@ async function sendHelpMessage(env, chatId) {
         `  _Example:_ /income 500 usd salary`,
         ``,
         `⚙️ *Management*`,
+        `• /budget <amount> [USD/KHR] — Set monthly spending limit (0 to disable).`,
         `• /clear — Wipe records (sends a CSV backup first).`,
         `• /help — Lists all available commands.`,
     ].join("\n");
