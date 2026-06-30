@@ -464,6 +464,11 @@
             opacity: 0.4;
             cursor: not-allowed;
         }
+
+        .btn-delete-tx:hover {
+            opacity: 1 !important;
+            transform: scale(1.15);
+        }
     </style>
 </head>
 <body>
@@ -781,8 +786,9 @@
                             <span class="tx-date">${tx.date}</span>
                         </div>
                     </div>
-                    <div class="tx-right">
+                    <div class="tx-right" style="flex-direction: row; align-items: center; gap: 10px;">
                         <span class="tx-amt ${classType}">${sign}${formattedAmount}</span>
+                        <button class="btn-delete-tx" data-id="${tx.id}" style="background: none; border: none; color: var(--danger); opacity: 0.4; cursor: pointer; font-size: 1rem; transition: opacity 0.2s, transform 0.2s; padding: 4px;">🗑️</button>
                     </div>
                 `;
                 listContainer.appendChild(row);
@@ -870,6 +876,45 @@
             loadHistoryData();
         });
 
+        // Deletion Event Delegation Handlers
+        async function handleDeleteTxClick(e) {
+            const btn = e.target.closest('.btn-delete-tx');
+            if (!btn) return;
+
+            const txId = btn.getAttribute('data-id');
+            if (!txId) return;
+
+            const confirmDelete = confirm("Are you sure you want to delete this transaction?");
+            if (!confirmDelete) return;
+
+            try {
+                const response = await fetch(`/api/delete?user_id=${userId}&id=${txId}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error("Failed to delete transaction.");
+                }
+
+                const result = await response.json();
+                if (result.ok) {
+                    // Check if history view is currently visible
+                    if (historyViewDiv.style.display === 'block') {
+                        loadHistoryData();
+                    } else {
+                        loadDashboardData(userId);
+                    }
+                } else {
+                    alert("Could not delete transaction: " + (result.error || "Unknown error"));
+                }
+            } catch (err) {
+                alert("Error deleting transaction: " + err.message);
+            }
+        }
+
+        document.getElementById('transaction-list').addEventListener('click', handleDeleteTxClick);
+        document.getElementById('history-transaction-list').addEventListener('click', handleDeleteTxClick);
+
         async function loadHistoryData() {
             historyListContainer.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 30px;"><div class="spinner" style="margin: 0 auto 12px; width:24px; height:24px;"></div>Loading history...</div>';
             
@@ -938,8 +983,9 @@
                             <span class="tx-date">${tx.date}</span>
                         </div>
                     </div>
-                    <div class="tx-right">
+                    <div class="tx-right" style="flex-direction: row; align-items: center; gap: 10px;">
                         <span class="tx-amt ${classType}">${sign}${formattedAmount}</span>
+                        <button class="btn-delete-tx" data-id="${tx.id}" style="background: none; border: none; color: var(--danger); opacity: 0.4; cursor: pointer; font-size: 1rem; transition: opacity 0.2s, transform 0.2s; padding: 4px;">🗑️</button>
                     </div>
                 `;
                 historyListContainer.appendChild(row);

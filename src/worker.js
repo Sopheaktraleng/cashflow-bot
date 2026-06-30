@@ -43,7 +43,7 @@ export default {
                 }
 
                 const recentRows = await env.DB.prepare(
-                    `SELECT amount, category, type, currency, date, created_at
+                    `SELECT id, amount, category, type, currency, date, created_at
                      FROM expenses
                      WHERE user_id = ?
                      ORDER BY date DESC, id DESC
@@ -113,25 +113,43 @@ export default {
             return json({ ok: true, service: "cashflow-bot" });
         }
 
-        if (request.method !== "POST" || url.pathname !== "/webhook") {
+        if (request.method === "POST") {
+            if (url.pathname === "/api/delete") {
+                const userId = url.searchParams.get("user_id");
+                const txId = url.searchParams.get("id");
+                if (!userId || !txId) {
+                    return json({ error: "Missing parameters" }, 400);
+                }
+
+                const result = await env.DB.prepare("DELETE FROM expenses WHERE user_id = ? AND id = ?")
+                    .bind(userId, txId)
+                    .run();
+
+                return json({ ok: true, changes: result.meta?.changes || 0 });
+            }
+
+            if (url.pathname === "/webhook") {
+                if (!env.TELEGRAM_BOT_TOKEN) {
+                    return json({ ok: false, error: "Missing TELEGRAM_BOT_TOKEN" }, 500);
+                }
+
+                if (env.WEBHOOK_SECRET) {
+                    const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+                    if (secret !== env.WEBHOOK_SECRET) {
+                        return json({ ok: false, error: "Unauthorized" }, 401);
+                    }
+                }
+
+                const update = await request.json();
+                await handleUpdateSafely(update, env, url.origin);
+
+                return json({ ok: true });
+            }
+
             return json({ ok: false, error: "Not found" }, 404);
         }
 
-        if (!env.TELEGRAM_BOT_TOKEN) {
-            return json({ ok: false, error: "Missing TELEGRAM_BOT_TOKEN" }, 500);
-        }
-
-        if (env.WEBHOOK_SECRET) {
-            const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-            if (secret !== env.WEBHOOK_SECRET) {
-                return json({ ok: false, error: "Unauthorized" }, 401);
-            }
-        }
-
-        const update = await request.json();
-        await handleUpdateSafely(update, env, url.origin);
-
-        return json({ ok: true });
+        return json({ ok: false, error: "Not found" }, 404);
     },
 
     async scheduled(event, env) {
@@ -639,7 +657,7 @@ async function getHistoryMessageData(db, userId, page = 1) {
 
     const { results } = await db
         .prepare(
-            `SELECT amount, category, type, currency, date, created_at 
+            `SELECT id, amount, category, type, currency, date, created_at 
              FROM expenses 
              WHERE user_id = ? 
              ORDER BY date DESC, id DESC 
@@ -1001,10 +1019,11 @@ async function sendMessage(env, chatId, text, extra = {}) {
     });
 }
 
-async function answerCallback(env, callbackQueryId) {
+async function answerCallback(env, callbackQueryId, extra = {}) {
     if (!callbackQueryId) return;
     return telegram(env, "answerCallbackQuery", {
         callback_query_id: callbackQueryId,
+        ...extra,
     });
 }
 
